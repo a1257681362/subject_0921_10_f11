@@ -44,19 +44,45 @@ public class ScoreService {
     private final RegistrationService registrationService;
     private final GradeRuleService ruleService;
     private final AbsenceMarkService absenceMarkService;
+    /** 成绩无效的外部口径（缺考裁定、违纪成绩作废等），空集合即仅看缺考口径。 */
+    private final List<ScoreValidityOverride> validityOverrides;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     public ScoreService(ExamScoreMapper scoreMapper,
                         ScoreChangeLogMapper changeLogMapper,
                         ExamBatchService batchService,
                         RegistrationService registrationService,
                         GradeRuleService ruleService,
-                        AbsenceMarkService absenceMarkService) {
+                        AbsenceMarkService absenceMarkService,
+                        List<ScoreValidityOverride> validityOverrides,
+                        org.springframework.context.ApplicationEventPublisher eventPublisher) {
         this.scoreMapper = scoreMapper;
         this.changeLogMapper = changeLogMapper;
         this.batchService = batchService;
         this.registrationService = registrationService;
         this.ruleService = ruleService;
         this.absenceMarkService = absenceMarkService;
+        this.validityOverrides = validityOverrides == null ? java.util.Collections.emptyList() : validityOverrides;
+        this.eventPublisher = eventPublisher;
+    }
+
+    /** 该报名记录是否被任一外部口径（缺考/违纪等）认定为成绩无效。 */
+    private boolean externallyInvalidated(Long registrationId) {
+        for (ScoreValidityOverride override : validityOverrides) {
+            if (override.invalidates(registrationId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String invalidationNote(Long registrationId) {
+        for (ScoreValidityOverride override : validityOverrides) {
+            if (override.invalidates(registrationId)) {
+                return override.describe(registrationId);
+            }
+        }
+        return null;
     }
 
     // ---------- 批量录入预检 ----------
@@ -101,6 +127,11 @@ public class ScoreService {
                         note = "新增成绩，定级：" + grade + "（规则版本 " + rule.version.getVersionNo() + "）";
                         if (absenceMarkService.isInvalidated(reg.getId())) {
                             note += "；该学员有生效的无效化裁定，成绩将记为无效";
+                        } else {
+                            String overrideNote = invalidationNote(reg.getId());
+                            if (overrideNote != null) {
+                                note += "；" + overrideNote;
+                            }
                         }
                         ok = true;
                     }
@@ -178,8 +209,9 @@ public class ScoreService {
             score.setRuleVersionNo(version.getVersionNo());
             score.setGradedAt(now);
             score.setStatus(GradeConstants.SCORE_RECORDED);
-            // 已有生效的无效化裁定（缺考/弃考/违纪）时，成绩落库即无效，与裁定口径一致
-            score.setValid(!absenceMarkService.isInvalidated(reg.getId()));
+            // 已有生效的无效化口径（缺考/弃考/违纪）时，成绩落库即无效，与裁定口径一致
+            boolean invalid = absenceMarkService.isInvalidated(reg.getId()) || externallyInvalidated(reg.getId());
+            score.setValid(!invalid);
             score.setRemark(in.getRemark());
             toInsert.add(score);
         }
@@ -187,6 +219,8 @@ public class ScoreService {
         for (ExamScore score : toInsert) {
             scoreMapper.insert(score);
         }
+        // 录入完成（事务内）广播：违纪等模块挂起的成绩回写在此补落
+        eventPublisher.publishEvent(new com.evops.grade.event.ScoreImportedEvent(toInsert));
         return toInsert;
     }
 

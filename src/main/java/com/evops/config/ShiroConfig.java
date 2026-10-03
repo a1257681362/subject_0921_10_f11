@@ -37,7 +37,7 @@ public class ShiroConfig {
                 try {
                     httpResponse.getWriter().write(objectMapper.writeValueAsString(
                             com.evops.common.ApiResponse.fail("FORBIDDEN",
-                                    "已认证但无权访问该资源（当前账号仅可访问证书验真窗口）")));
+                                    "已认证但无权访问该资源（账号角色与该接口不匹配）")));
                 } catch (java.io.IOException e) {
                     throw new IllegalStateException("写出 403 响应失败", e);
                 }
@@ -88,10 +88,14 @@ public class ShiroConfig {
     @Bean
     public Realm localRealm() {
         SimpleAccountRealm realm = new SimpleAccountRealm();
-        // 内部管理账号：全部接口
+        // 内部管理账号：全部内部接口
         realm.addAccount("bootstrap", "bootstrap", "system");
+        // 违纪封存授权岗：仅可访问违纪封存档案 /api/discipline/sealed/**
+        realm.addAccount("archive", "archive", "dossier");
         // 用人单位账号：仅可访问对外验真窗口 /api/cert-verify（其他接口 roles[system] 返回 403）
         realm.addAccount("employer", "employer", "employer");
+        // 学员账号：仅可访问本人案件脱敏查询门户 /api/discipline/portal/**
+        realm.addAccount("student", "student", "student");
         return realm;
     }
 
@@ -102,7 +106,11 @@ public class ShiroConfig {
         chain.addPathDefinition("/error", "anon");
         // 对外验真窗口：任意已认证账号可访问（含用人单位 employer），走 HTTP Basic
         chain.addPathDefinition("/api/cert-verify", "authcBasic");
-        // 其余 API 仅内部管理角色 system；用人单位访问返回可读 403
+        // 学员案件门户：任意已认证账号可访问（含学员 student），仅按报名号脱敏返回本人案件
+        chain.addPathDefinition("/api/discipline/portal/**", "authcBasic");
+        // 违纪封存档案：仅授权岗 dossier（封存记录只有授权岗能看）
+        chain.addPathDefinition("/api/discipline/sealed/**", "authcBasic,roles[dossier]");
+        // 其余 API 仅内部管理角色 system；用人单位/学员访问返回可读 403
         chain.addPathDefinition("/api/**", "authcBasic,roles[system]");
         chain.addPathDefinition("/**", "authc");
         return chain;

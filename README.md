@@ -447,3 +447,51 @@
 - `GET /api/capacity/notifications?regNo=&waitlistId=&unreadOnly=`、`POST /api/capacity/notifications/{id}/read`：QUEUED/OFFER/SEATED/EXPIRED/CANCELLED/REJECTED 六类通知（本版先落库，短信等外发渠道下版再接）；OFFER 必带 `offerDeadline`。
 
 > 新表 `t_capacity_rule / t_capacity_rule_version / t_capacity_state / t_capacity_waitlist / t_capacity_waitlist_event / t_capacity_notification` 已纳入工作区快照与回退；schema 版本号 `capacity-1`。并发安全：入队/递补/确认/超时全部经 `t_capacity_state FOR UPDATE` 行锁串行，占座 = 在册未退位 + 待确认，杜绝超卖与重复递补。
+
+## 违纪案件立案处置工作区（discipline-1）
+
+解决"违纪处理靠邮件来回、一期案子拖一个月、期限没人盯"：监考上报**附证据立案**即定处理决定期限；临期/超时**自动催办**；处理决定类型对应**成绩作废 / 禁考**后果，执行结果**回写成绩档案**与禁考名册；撤销立案**必走复核**（第二人），全程版本轨迹；学员能查自己案子（**脱敏**）；闭环/撤销即**封存**，封存记录仅授权岗可查。
+
+案件状态机：**FILED 已立案待决定 → DECIDED 已决定待执行 → CLOSED 已执行闭环（封存）**；DECIDED/CLOSED 可申请撤销 → **REVIEWING 复核中 → REVOKED 已撤销（封存）**（通过回滚后果）/ 驳回回到原状态。每次流转只追加一版 `t_discipline_case_version`，证据/催办/执行明细均只追加。
+
+### 48. 监考上报附证据立案（立案即定期限）
+
+- `POST /api/discipline/cases`：`{batchId,regNo,violationType,title,description?,reporterCode,reporterName?,handlerCode?,handlerName?,occurredAt?,dueDays?,evidences:[{evidenceType,fileName,fileRef?,description?}],remark?}`。违纪类型 CHEAT 作弊 / IMPERSONATE 替考 / PROHIBITED 携带违禁品 / DISORDER 扰乱秩序 / OTHER 其他；证据类型 PHOTO/VIDEO/DOC/WITNESS/OTHER。
+- **无证据不立案**（`EVIDENCE_REQUIRED`），证据至少一件；案件号 `WJ + 立案日期8位 + 4位流水`。
+- 立案即写处理决定期限：`decisionDueAt = 立案钟点 + dueDays`（缺省 7 天，1~365 校验），承办人缺省为上报人、催办责任到人。
+- `POST /api/discipline/cases/{id}/evidences`：仅 FILED 阶段可补证据（只追加；决定作出后证据固定 `CASE_NOT_FILED`）。
+
+### 49. 限期出处理决定（超时自动催办）
+
+- `POST /api/discipline/cases/{id}/decision`：`{decisionType,reason,banMonths?,makerCode,makerName?}`，仅 FILED 可决定。决定类型：**WARNING 警告 / SCORE_VOID 成绩作废 / BAN 禁考 / SCORE_VOID_BAN 作废并禁考**；禁考必须带正整数月数（`BAN_MONTHS_REQUIRED`），决定时即落定后果标志与禁考截止日。
+- 催办兜底：`DisciplineReminderScheduler` 每分钟扫描（`evops.discipline.remind-cron` 可配，默认每分钟；`POST /api/discipline/reminders/scan` 手动同逻辑，幂等）：
+  - **临期 DUE_SOON**：到期前 24 小时内的 FILED 案件，一轮提醒；
+  - **超时 OVERDUE**：到期钟点起首轮，此后每 24 小时一轮；
+  - 每轮**站内 IN_SITE + 邮件 EMAIL 各一条**落 `t_discipline_reminder`（本版先落库留痕，外发渠道下版接），唯一约束 `(case_id,remind_round,channel)` 防重复。
+- `GET /api/discipline/cases/{id}/reminders` 可查催办轨迹。
+
+### 50. 决定执行：后果落地 + 回写成绩档案
+
+- `POST /api/discipline/cases/{id}/execute`：仅 DECIDED 可执行，逐项落 `t_discipline_execution`（只追加）：
+  - **成绩作废**：成绩档案已存在 → 回写 `t_exam_score.valid=false`（DONE，记 valid 前后值）；档案尚未生成 → 执行记录挂 **PENDING**，案件照常闭环；成绩一旦录入，由 `DisciplineScoreBridge` 监听成绩录入事件**自动补回写** valid=false；成绩录入预检也通过 `ScoreValidityOverride` 提示"有已生效的违纪成绩作废决定，成绩将记为无效"。
+  - **禁考**：写入禁考名册 `t_exam_ban`（ACTIVE，ban_from 当日、ban_until = 决定日+月数）；**报名导入按证件号拦截**——预检列为拒收（说明禁考至何日、关联案件号），执行整批拒收 `REG_BANNED`（无证件号不拦，转人工核验；按服务器日期判定区间）。
+- 执行后状态 CLOSED 并**封存**（`sealed=true, sealed_at`），向学员发执行通知（复用成绩通知通道落库）。
+
+### 51. 撤销立案走复核（通过回滚，轨迹留全）
+
+- `POST /api/discipline/cases/{id}/revoke-apply`：`{applicantCode,applicantName?,applyReason}`，仅 DECIDED/CLOSED 可申请（`REVIEW_ALREADY_PENDING` 防重复），进入 REVIEWING；**复核期间不停止执行**。
+- `POST /api/discipline/reviews/{reviewId}/conclusion`：`{approved,reviewerCode,reviewerName?,comment?}`——**复核人不能是申请人本人**（`REVIEWER_SAME_AS_APPLICANT`，双人复核）；驳回必须写意见，案件回到申请前状态（DECIDED/CLOSED，不封存，可再次申请）；
+- 复核通过 → REVOKED 并封存，已落地后果**逐项回滚**：禁考置 LIFTED（留痕不删行，报名恢复放行）；成绩已作废的恢复 valid=true（若该生另有生效的缺考无效裁定则维持无效，不覆盖别模块口径）；PENDING 的待回写置 CANCELED；回滚各记一条执行记录（SCORE_RESTORE/BAN_LIFT）。
+- `GET /api/discipline/cases/{id}/versions`：版本链（FILE/DECIDE/EXECUTE/REVOKE_APPLY/REVOKE_APPROVE/REVOKE_REJECT 全程只追加）；另可查 `/evidences /executions /reviews /reminders`。
+
+### 52. 学员查自己案子（脱敏）
+
+- `GET /api/discipline/portal/cases?regNo=`：任意已认证账号可访问（含 student 角色），**只按报名号返回本人案件**；脱敏视图不含证件号、案情详述、上报人/承办人/决定人/复核人、证据文件名与存储引用，仅回案件号、状态（中文）、违纪类型、标题、决定类型、期限/是否超时、决定/执行/封存钟点、复核进度、证据件数。查别人报名号为空。
+
+### 53. 封存记录只有授权岗能看
+
+- 闭环（CLOSED）/撤销（REVOKED）即封存；普通办案接口 `GET /api/discipline/cases` 默认**不含封存**，直接调封存案件详情给 `CASE_SEALED_FORBIDDEN`。
+- 封存档案独立路径 `/api/discipline/sealed/cases[?regNo=]` 与 `/api/discipline/sealed/cases/{id}/{versions|evidences|executions|reviews|reminders}`，Shiro 链路 `roles[dossier]` 仅授权岗可访问。
+- 内置账号：`archive/archive`（dossier 授权岗，仅封存档案）、`student/student`（学员门户）；`bootstrap`（system，办案接口但不能看封存）；`employer`（证书验真窗口 + 学员门户——门户只按报名号返回脱敏数据，拿不到内部信息）。未认证 401、角色不符 403（可读 JSON）。
+
+> 新表 `t_discipline_case / t_discipline_case_version / t_discipline_evidence / t_discipline_reminder / t_discipline_review / t_discipline_execution / t_exam_ban`，schema 版本号 `discipline-1`。与缺考模块的轻量违纪记录（`t_violation_record`，自动标缺考输入）并存：前者管"违纪案件处置全流程"，后者管"签到口径输入"，成绩作废以违纪案件决定为准。

@@ -48,15 +48,18 @@ public class RegistrationService {
     private final RegistrationCorrectionMapper correctionMapper;
     private final ExamBatchService batchService;
     private final StageResultService stageResultService;
+    private final ExamBanService banService;
 
     public RegistrationService(RegistrationMapper registrationMapper,
                                RegistrationCorrectionMapper correctionMapper,
                                ExamBatchService batchService,
-                               StageResultService stageResultService) {
+                               StageResultService stageResultService,
+                               ExamBanService banService) {
         this.registrationMapper = registrationMapper;
         this.correctionMapper = correctionMapper;
         this.batchService = batchService;
         this.stageResultService = stageResultService;
+        this.banService = banService;
     }
 
     // ---------- 批量导入：预检影响范围 ----------
@@ -74,12 +77,14 @@ public class RegistrationService {
             String regNo = r.getRegNo().trim();
             boolean dupInFile = !seen.add(regNo);
             boolean exists = existing.containsKey(regNo);
-            boolean ok = !dupInFile && !exists;
+            String banReason = (!dupInFile && !exists) ? banService.rejectReason(r.getIdNo()) : null;
+            boolean ok = !dupInFile && !exists && banReason == null;
             String note = dupInFile ? "名册文件内报名号重复，将拒收"
                     : exists ? "报名号已存在（可能在其他批次），将拒收"
+                    : (banReason != null ? banReason
                     : (r.getSchool() == null || r.getSchool().trim().isEmpty()
                             ? "新增报名（未填学校）"
-                            : "新增报名（学校：" + r.getSchool().trim() + "）");
+                            : "新增报名（学校：" + r.getSchool().trim() + "）"));
             if (ok) {
                 actionable++;
             } else {
@@ -118,6 +123,8 @@ public class RegistrationService {
             if (exists != null) {
                 throw new BusinessException("REG_DUP_EXISTING", "报名号已存在，整批拒收：" + regNo);
             }
+            // 禁考名册拦截：证件号命中生效禁考整批拒收（无证件号不拦，转人工核验）
+            banService.assertNotBanned(r.getIdNo(), regNo);
         }
 
         List<String> affected = new ArrayList<>();
