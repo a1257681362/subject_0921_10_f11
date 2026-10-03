@@ -31,5 +31,7 @@ public class ExamScore extends BaseEntity {
     private String status;
     /** 成绩是否有效：缺考裁定生效时由裁定模块回写；统计与合格名单只认有效成绩。 */
     private Boolean valid;
+    /** 违纪成绩作废锚点：成绩作废后果执行/晚到成绩导入时回写案件号；撤销立案时清空。 */
+    private String disciplineCaseNo;
     private String remark;
 }

@@ -44,19 +44,22 @@ public class ScoreService {
     private final RegistrationService registrationService;
     private final GradeRuleService ruleService;
     private final AbsenceMarkService absenceMarkService;
+    private final com.evops.discipline.service.DisciplineCaseService disciplineCaseService;
 
     public ScoreService(ExamScoreMapper scoreMapper,
                         ScoreChangeLogMapper changeLogMapper,
                         ExamBatchService batchService,
                         RegistrationService registrationService,
                         GradeRuleService ruleService,
-                        AbsenceMarkService absenceMarkService) {
+                        AbsenceMarkService absenceMarkService,
+                        com.evops.discipline.service.DisciplineCaseService disciplineCaseService) {
         this.scoreMapper = scoreMapper;
         this.changeLogMapper = changeLogMapper;
         this.batchService = batchService;
         this.registrationService = registrationService;
         this.ruleService = ruleService;
         this.absenceMarkService = absenceMarkService;
+        this.disciplineCaseService = disciplineCaseService;
     }
 
     // ---------- 批量录入预检 ----------
@@ -101,6 +104,9 @@ public class ScoreService {
                         note = "新增成绩，定级：" + grade + "（规则版本 " + rule.version.getVersionNo() + "）";
                         if (absenceMarkService.isInvalidated(reg.getId())) {
                             note += "；该学员有生效的无效化裁定，成绩将记为无效";
+                        }
+                        if (disciplineCaseService.isScoreVoided(reg.getId())) {
+                            note += "；该学员有生效的违纪成绩作废决定，成绩将记为无效";
                         }
                         ok = true;
                     }
@@ -178,14 +184,20 @@ public class ScoreService {
             score.setRuleVersionNo(version.getVersionNo());
             score.setGradedAt(now);
             score.setStatus(GradeConstants.SCORE_RECORDED);
-            // 已有生效的无效化裁定（缺考/弃考/违纪）时，成绩落库即无效，与裁定口径一致
-            score.setValid(!absenceMarkService.isInvalidated(reg.getId()));
+            // 已有生效的无效化裁定（缺考/弃考）或违纪成绩作废决定时，成绩落库即无效，与裁定/决定口径一致
+            boolean voidByRuling = absenceMarkService.isInvalidated(reg.getId());
+            boolean voidByDiscipline = disciplineCaseService.isScoreVoided(reg.getId());
+            score.setValid(!voidByRuling && !voidByDiscipline);
             score.setRemark(in.getRemark());
             toInsert.add(score);
         }
 
         for (ExamScore score : toInsert) {
             scoreMapper.insert(score);
+        }
+        // 成绩晚到：把违纪案件挂起的成绩作废后果回写到新成绩（缺考无效化在上面已直接置无效）
+        for (ExamScore score : toInsert) {
+            disciplineCaseService.onScoreImported(score);
         }
         return toInsert;
     }

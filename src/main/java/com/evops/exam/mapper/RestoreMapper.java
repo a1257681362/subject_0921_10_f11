@@ -64,6 +64,12 @@ import com.evops.capacity.entity.CapacityState;
 import com.evops.capacity.entity.CapacityWaitlist;
 import com.evops.capacity.entity.CapacityWaitlistEvent;
 import com.evops.capacity.entity.CapacityNotification;
+import com.evops.discipline.entity.DisciplineCase;
+import com.evops.discipline.entity.DisciplineCaseVersion;
+import com.evops.discipline.entity.DisciplineConfig;
+import com.evops.discipline.entity.DisciplineConsequence;
+import com.evops.discipline.entity.DisciplineEvidence;
+import com.evops.discipline.entity.DisciplineUrge;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
@@ -222,10 +228,11 @@ public interface RestoreMapper {
     void insertGradeRuleVersion(GradeRuleVersion v);
 
     @Insert("INSERT INTO t_exam_score (id, batch_id, registration_id, reg_no, name, paper_score, final_score, grade, "
-            + "rule_version_id, rule_version_no, graded_at, status, valid, remark, create_by, create_time, update_by, "
-            + "update_time) VALUES (#{id},#{batchId},#{registrationId},#{regNo},#{name},#{paperScore},"
+            + "rule_version_id, rule_version_no, graded_at, status, valid, discipline_case_no, remark, "
+            + "create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{batchId},#{registrationId},#{regNo},#{name},#{paperScore},"
             + "#{finalScore},#{grade},#{ruleVersionId},#{ruleVersionNo},#{gradedAt},#{status},"
-            + "COALESCE(#{valid},TRUE),#{remark},"
+            + "COALESCE(#{valid},TRUE),#{disciplineCaseNo},#{remark},"
             + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
     void insertScore(ExamScore s);
 
@@ -1150,4 +1157,113 @@ public interface RestoreMapper {
 
     @Update("ALTER TABLE t_capacity_notification ALTER COLUMN id RESTART WITH ${value}")
     void restartCapacityNotification(@Param("value") long value);
+
+    // ============ discipline-1：违纪立案与案件封存 ============
+    @Delete("DELETE FROM t_discipline_urge")
+    void clearDisciplineUrges();
+
+    @Delete("DELETE FROM t_discipline_consequence")
+    void clearDisciplineConsequences();
+
+    @Delete("DELETE FROM t_discipline_case_version")
+    void clearDisciplineCaseVersions();
+
+    @Delete("DELETE FROM t_discipline_evidence")
+    void clearDisciplineEvidences();
+
+    @Delete("DELETE FROM t_discipline_case")
+    void clearDisciplineCases();
+
+    @Delete("DELETE FROM t_discipline_config")
+    void clearDisciplineConfigs();
+
+    @Insert("INSERT INTO t_discipline_case (id, case_no, batch_id, registration_id, reg_no, name, id_no, "
+            + "violation_type, description, occurred_at, source, status, prev_status, current_version, reporter, "
+            + "reported_at, assignee, decision_deadline, urged_count, last_urged_at, decision_type, "
+            + "decision_content, decider, decided_at, revoke_applicant, revoke_reason, revoke_reviewer, "
+            + "revoke_review_comment, revoked_at, executed_at, sealed, sealed_by, sealed_at, seal_remark, "
+            + "operator, remark, create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{caseNo},#{batchId},#{registrationId},#{regNo},#{name},#{idNo},"
+            + "#{violationType},#{description},#{occurredAt},#{source},#{status},#{prevStatus},#{currentVersion},"
+            + "#{reporter},#{reportedAt},#{assignee},#{decisionDeadline},#{urgedCount},#{lastUrgedAt},"
+            + "#{decisionType},#{decisionContent},#{decider},#{decidedAt},#{revokeApplicant},#{revokeReason},"
+            + "#{revokeReviewer},#{revokeReviewComment},#{revokedAt},#{executedAt},"
+            + "COALESCE(#{sealed},FALSE),#{sealedBy},#{sealedAt},#{sealRemark},#{operator},#{remark},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertDisciplineCase(DisciplineCase c);
+
+    @Insert("INSERT INTO t_discipline_evidence (id, case_id, case_no, evidence_no, evidence_type, title, "
+            + "file_ref, content_hash, content, reporter, collected_at, "
+            + "create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{caseId},#{caseNo},#{evidenceNo},#{evidenceType},#{title},"
+            + "#{fileRef},#{contentHash},#{content},#{reporter},#{collectedAt},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertDisciplineEvidence(DisciplineEvidence e);
+
+    @Insert("INSERT INTO t_discipline_case_version (id, case_id, version_no, status, change_type, violation_type, "
+            + "decision_type, change_reason, reviewer, operator, changed_at, "
+            + "create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{caseId},#{versionNo},#{status},#{changeType},#{violationType},"
+            + "#{decisionType},#{changeReason},#{reviewer},#{operator},#{changedAt},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertDisciplineCaseVersion(DisciplineCaseVersion v);
+
+    @Insert("INSERT INTO t_discipline_consequence (id, case_id, case_no, batch_id, registration_id, reg_no, name, "
+            + "cons_type, status, score_id, score_before, grade_before, ban_from, ban_until, executed_by, "
+            + "executed_at, execute_remark, cancelled_by, cancelled_at, cancel_reason, "
+            + "create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{caseId},#{caseNo},#{batchId},#{registrationId},#{regNo},#{name},"
+            + "#{consType},#{status},#{scoreId},#{scoreBefore},#{gradeBefore},#{banFrom},#{banUntil},"
+            + "#{executedBy},#{executedAt},#{executeRemark},#{cancelledBy},#{cancelledAt},#{cancelReason},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertDisciplineConsequence(DisciplineConsequence c);
+
+    @Insert("INSERT INTO t_discipline_urge (id, case_id, case_no, urge_round, recipient, title, content, deadline, "
+            + "channel, status, urged_by, urged_at, read_at, create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{caseId},#{caseNo},#{urgeRound},#{recipient},#{title},#{content},#{deadline},"
+            + "#{channel},#{status},#{urgedBy},#{urgedAt},#{readAt},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertDisciplineUrge(DisciplineUrge u);
+
+    @Insert("INSERT INTO t_discipline_config (id, config_key, config_value, remark, operator, "
+            + "create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{configKey},#{configValue},#{remark},#{operator},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertDisciplineConfig(DisciplineConfig c);
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_discipline_case")
+    long maxDisciplineCaseId();
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_discipline_evidence")
+    long maxDisciplineEvidenceId();
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_discipline_case_version")
+    long maxDisciplineCaseVersionId();
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_discipline_consequence")
+    long maxDisciplineConsequenceId();
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_discipline_urge")
+    long maxDisciplineUrgeId();
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_discipline_config")
+    long maxDisciplineConfigId();
+
+    @Update("ALTER TABLE t_discipline_case ALTER COLUMN id RESTART WITH ${value}")
+    void restartDisciplineCase(@Param("value") long value);
+
+    @Update("ALTER TABLE t_discipline_evidence ALTER COLUMN id RESTART WITH ${value}")
+    void restartDisciplineEvidence(@Param("value") long value);
+
+    @Update("ALTER TABLE t_discipline_case_version ALTER COLUMN id RESTART WITH ${value}")
+    void restartDisciplineCaseVersion(@Param("value") long value);
+
+    @Update("ALTER TABLE t_discipline_consequence ALTER COLUMN id RESTART WITH ${value}")
+    void restartDisciplineConsequence(@Param("value") long value);
+
+    @Update("ALTER TABLE t_discipline_urge ALTER COLUMN id RESTART WITH ${value}")
+    void restartDisciplineUrge(@Param("value") long value);
+
+    @Update("ALTER TABLE t_discipline_config ALTER COLUMN id RESTART WITH ${value}")
+    void restartDisciplineConfig(@Param("value") long value);
 }

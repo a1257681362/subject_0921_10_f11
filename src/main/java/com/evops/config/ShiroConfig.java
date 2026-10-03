@@ -37,13 +37,19 @@ public class ShiroConfig {
                 try {
                     httpResponse.getWriter().write(objectMapper.writeValueAsString(
                             com.evops.common.ApiResponse.fail("FORBIDDEN",
-                                    "已认证但无权访问该资源（当前账号仅可访问证书验真窗口）")));
+                                    "已认证但无权访问该资源（当前账号仅可访问被授权的窗口）")));
                 } catch (java.io.IOException e) {
                     throw new IllegalStateException("写出 403 响应失败", e);
                 }
                 return false;
             }
         };
+    }
+
+    /** 任一角色满足即放行（OR 语义）：封存记录窗口对 system 与违纪档案授权岗开放。 */
+    @Bean("anyRoles")
+    public Filter anyRolesFilter(ObjectMapper objectMapper) {
+        return new AnyRolesAuthorizationFilter(objectMapper);
     }
 
     /**
@@ -61,6 +67,15 @@ public class ShiroConfig {
     @Bean
     public FilterRegistrationBean<Filter> disableRolesServletRegistration(
             @org.springframework.beans.factory.annotation.Qualifier("roles") Filter filter) {
+        FilterRegistrationBean<Filter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    /** anyRoles 同理：只在 Shiro 链内按名生效，禁用 Spring Boot 对 /* 的自动注册。 */
+    @Bean
+    public FilterRegistrationBean<Filter> disableAnyRolesServletRegistration(
+            @org.springframework.beans.factory.annotation.Qualifier("anyRoles") Filter filter) {
         FilterRegistrationBean<Filter> registration = new FilterRegistrationBean<>(filter);
         registration.setEnabled(false);
         return registration;
@@ -92,6 +107,8 @@ public class ShiroConfig {
         realm.addAccount("bootstrap", "bootstrap", "system");
         // 用人单位账号：仅可访问对外验真窗口 /api/cert-verify（其他接口 roles[system] 返回 403）
         realm.addAccount("employer", "employer", "employer");
+        // 违纪档案授权岗：仅可访问封存记录窗口 /api/discipline/sealed/**（其他接口返回 403）
+        realm.addAccount("archiver", "archiver", "discipline_archiver");
         return realm;
     }
 
@@ -102,7 +119,9 @@ public class ShiroConfig {
         chain.addPathDefinition("/error", "anon");
         // 对外验真窗口：任意已认证账号可访问（含用人单位 employer），走 HTTP Basic
         chain.addPathDefinition("/api/cert-verify", "authcBasic");
-        // 其余 API 仅内部管理角色 system；用人单位访问返回可读 403
+        // 违纪封存记录窗口：内部管理(system)或违纪档案授权岗(discipline_archiver)任一即可，其余账号 403
+        chain.addPathDefinition("/api/discipline/sealed/**", "authcBasic,anyRoles[system,discipline_archiver]");
+        // 其余 API 仅内部管理角色 system；用人单位/档案岗访问返回可读 403
         chain.addPathDefinition("/api/**", "authcBasic,roles[system]");
         chain.addPathDefinition("/**", "authc");
         return chain;

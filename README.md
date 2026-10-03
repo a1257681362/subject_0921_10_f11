@@ -447,3 +447,66 @@
 - `GET /api/capacity/notifications?regNo=&waitlistId=&unreadOnly=`、`POST /api/capacity/notifications/{id}/read`：QUEUED/OFFER/SEATED/EXPIRED/CANCELLED/REJECTED 六类通知（本版先落库，短信等外发渠道下版再接）；OFFER 必带 `offerDeadline`。
 
 > 新表 `t_capacity_rule / t_capacity_rule_version / t_capacity_state / t_capacity_waitlist / t_capacity_waitlist_event / t_capacity_notification` 已纳入工作区快照与回退；schema 版本号 `capacity-1`。并发安全：入队/递补/确认/超时全部经 `t_capacity_state FOR UPDATE` 行锁串行，占座 = 在册未退位 + 待确认，杜绝超卖与重复递补。
+
+## 违纪立案与案件封存工作区（discipline-1）
+
+解决"违纪处理靠邮件来回、一期案子拖一个月、期限没人盯"：把流程做进 evops-base——
+**监考上报附证据立案 → 限期出处理决定、超时系统自动催办 → 决定类型对应成绩作废/禁考、执行结果回写成绩档案
+→ 撤销立案必须走复核、全程轨迹只追加 → 学员脱敏查自己案件 → 结案封存、封存记录仅授权岗可查。**
+违纪案件分**模块（主表）/ 版本（只追加）/ 状态（当前版本）**三段，与缺考裁定、出入登记同一套版本模式。
+
+账号口径：内部办案仍用 `bootstrap/bootstrap`（角色 `system`）；新增**违纪档案授权岗** `archiver/archiver`
+（角色 `discipline_archiver`），**只能访问封存窗口 `/api/discipline/sealed/**`**，访问其余接口返回 403；
+`employer` 不能访问封存窗口。
+
+### 48. 监考上报附证据立案（立案即起算期限）
+
+- `POST /api/discipline/cases`：`{batchId, regNo, violationType, description?, occurredAt?, assignee?, source?, evidences:[...]}`。
+  违纪类型 `CHEAT 作弊 / IMPERSONATE 替考 / PROHIBITED 携带违禁品 / DISORDER 扰乱秩序 / OTHER 其他`；
+  **上报必须附证据（至少一条）**：`{evidenceType,title,fileRef?,contentHash?,content?,collectedAt?}`，
+  类型 `PHOTO/VIDEO/DOC/STATEMENT/OTHER`，情况说明必须有正文、其余需附件引用或文字内容；未来时间拒收。
+  案件号 `WJ + 批次编码 + 4 位流水`；上报即 **REPORTED 已立案待决定**，同学员有在办案件不能重复立案（`CASE_EXISTS`）。
+- 处理决定期限 = 上报时间 + 配置期限（缺省 168 小时），记入 `decision_deadline`，**只按服务器钟点判定超时**。
+- `POST /api/discipline/cases/{id}/evidences`：立案后补充证据，**只追加**，不改不删已有证据；已撤销/已封存不能补。
+
+### 49. 限期出处理决定（超时自动催办）
+
+- `POST /api/discipline/cases/{id}/decision`：`{decisionType, decisionContent, banFrom?, banUntil?}`，
+  类型 `WARNING 警告 / SCORE_VOID 成绩作废 / BAN 禁考 / SCORE_VOID_AND_BAN 成绩作废并禁考`；
+  REPORTED→**DECIDED**，决定正文与类型冻结进版本，并站内送达学员。禁考区间成对校验，`banUntil` 空表示长期禁考。
+- **超时自动催办**：`DisciplineUrgeScheduler` 每分钟扫描（`evops.discipline.urge-cron` 可配），
+  超过 `decision_deadline` 仍 REPORTED 的案件自动催办承办人，首轮超时即催，其后按间隔（缺省每 24 小时）升级一轮；
+  每轮只追加一条催办记录（站内落库，外发渠道下版再接）。也可 `POST /api/discipline/urge/sweep` 人工立即执行。
+- `GET /api/discipline/urges?caseId=&status=&recipient=`、`POST /api/discipline/urges/{id}/read`。
+- 期限/间隔/默认承办人可调：`GET /api/discipline/config`、`PUT /api/discipline/config/{key}?value=&remark=`
+  （键 `DECISION_DEADLINE_HOURS / URGE_INTERVAL_HOURS / DEFAULT_ASSIGNEE`，小时数须正整数）。
+
+### 50. 后果执行回写成绩档案（成绩晚到挂起自动回写）
+
+- `POST /api/discipline/cases/{id}/execute`：DECIDED→**EXECUTED**，逐条生成并执行后果：
+  - **成绩作废**：有成绩即回写成绩档案——`t_exam_score.valid=false` 并挂案件号锚点 `discipline_case_no`，后果记下作废前分数/等级；
+  - **成绩尚未导入**：后果挂 **PENDING_SCORE**（不阻塞结案），成绩导入时在同一事务**自动回写作废**；
+  - **禁考**：禁考区间决定即生效（EXECUTED）。仅 WARNING 的决定无成绩后果。
+- 与缺考裁定同一口径：成绩导入预检/执行时若该学员有**生效的成绩作废决定**（DECIDED/EXECUTED/SEALED），
+  成绩**落库即无效**（与缺考无效化取并集）；`GET /api/scores/batch/{batchId}` 可见无效标记与案件号。
+
+### 51. 撤销立案走复核（轨迹留全）
+
+- `POST /api/discipline/cases/{id}/revoke` `{reason}`：撤销必须申请，案件进 **REVOKE_PENDING 撤销复核中**，原决定暂停（期间导入的成绩暂不回写）。
+- `POST /api/discipline/cases/{id}/revoke-review` `{approved, comment?}`：复核人取 `X-Operator`，**须非撤销申请人**（`REVIEWER_SAME_AS_APPLICANT`），驳回必填意见。
+  - **通过 → REVOKED**：已执行的成绩作废**恢复成绩有效并清案件号**（该生另有缺考无效裁定时仍保持无效）、禁考区间作废、挂起项取消，全部后果置 **CANCELLED** 并通知学员；
+  - **驳回**：回到申请前状态维持原处理，复核期间晚到的成绩**补回写作废**。
+- `GET /api/discipline/cases/{id}/versions`：版本链 `CREATE/DECIDE/EXECUTE/REVOKE_APPLY/REVOKE_APPROVE/REVOKE_REJECT/SEAL` 只追加；
+  `GET /api/discipline/cases/{id}/evidences|consequences` 查证据与后果台账。
+
+### 52. 学员脱敏自查 + 结案封存授权
+
+- 学员凭报名号请求头 **`X-Self-Code=<报名号>`** 查自己案件：
+  `GET /api/discipline/my-cases`、`GET /api/discipline/my-cases/by-no/{caseNo}`。
+  只回**脱敏**信息：掩码姓名（如 `张*`）、案件号、违纪类型、当前状态、决定结论（送达内容）、阶段轨迹与钟点；
+  **不含证件号、上报监考、承办人、证据原文/附件、催办记录**；查别人的案件统一"查无此案"，不暴露存在性。
+- `POST /api/discipline/cases/{id}/seal`：仅 **EXECUTED 已执行完结或 REVOKED 已撤销**的案件可**结案封存（SEALED）**，封存后只读。
+- **封存记录只有授权岗能看**：独立只读窗口 `/api/discipline/sealed/cases`、`/cases/{id}`、`/cases/{id}/evidences|consequences|versions`，
+  仅回已封存记录（含证据与完整轨迹），Shiro 链路限定 `system` 或 `discipline_archiver` 任一角色，其余已认证账号 403、未认证 401。
+
+> 新表 `t_discipline_case / t_discipline_evidence / t_discipline_case_version / t_discipline_consequence / t_discipline_urge / t_discipline_config` 已纳入工作区快照与回退；`t_exam_score` 加列 `discipline_case_no`（老库平滑加列）；schema 版本号 `discipline-1`。

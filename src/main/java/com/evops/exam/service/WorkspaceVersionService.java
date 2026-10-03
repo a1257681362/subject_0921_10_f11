@@ -126,6 +126,18 @@ import com.evops.capacity.mapper.CapacityStateMapper;
 import com.evops.capacity.mapper.CapacityWaitlistMapper;
 import com.evops.capacity.mapper.CapacityWaitlistEventMapper;
 import com.evops.capacity.mapper.CapacityNotificationMapper;
+import com.evops.discipline.entity.DisciplineCase;
+import com.evops.discipline.entity.DisciplineCaseVersion;
+import com.evops.discipline.entity.DisciplineConfig;
+import com.evops.discipline.entity.DisciplineConsequence;
+import com.evops.discipline.entity.DisciplineEvidence;
+import com.evops.discipline.entity.DisciplineUrge;
+import com.evops.discipline.mapper.DisciplineCaseMapper;
+import com.evops.discipline.mapper.DisciplineCaseVersionMapper;
+import com.evops.discipline.mapper.DisciplineConfigMapper;
+import com.evops.discipline.mapper.DisciplineConsequenceMapper;
+import com.evops.discipline.mapper.DisciplineEvidenceMapper;
+import com.evops.discipline.mapper.DisciplineUrgeMapper;
 import com.evops.exam.mapper.AdmissionTicketMapper;
 import com.evops.exam.mapper.ExamBatchMapper;
 import com.evops.exam.mapper.ExamRoomMapper;
@@ -223,6 +235,12 @@ public class WorkspaceVersionService {
     private final CapacityWaitlistMapper capacityWaitlistMapper;
     private final CapacityWaitlistEventMapper capacityWaitlistEventMapper;
     private final CapacityNotificationMapper capacityNotificationMapper;
+    private final DisciplineCaseMapper disciplineCaseMapper;
+    private final DisciplineCaseVersionMapper disciplineCaseVersionMapper;
+    private final DisciplineEvidenceMapper disciplineEvidenceMapper;
+    private final DisciplineConsequenceMapper disciplineConsequenceMapper;
+    private final DisciplineUrgeMapper disciplineUrgeMapper;
+    private final DisciplineConfigMapper disciplineConfigMapper;
     private final ObjectMapper objectMapper;
     private final RestoreMapper restoreMapper;
 
@@ -292,6 +310,12 @@ public class WorkspaceVersionService {
                                    CapacityWaitlistMapper capacityWaitlistMapper,
                                    CapacityWaitlistEventMapper capacityWaitlistEventMapper,
                                    CapacityNotificationMapper capacityNotificationMapper,
+                                   DisciplineCaseMapper disciplineCaseMapper,
+                                   DisciplineCaseVersionMapper disciplineCaseVersionMapper,
+                                   DisciplineEvidenceMapper disciplineEvidenceMapper,
+                                   DisciplineConsequenceMapper disciplineConsequenceMapper,
+                                   DisciplineUrgeMapper disciplineUrgeMapper,
+                                   DisciplineConfigMapper disciplineConfigMapper,
                                    ObjectMapper objectMapper,
                                    RestoreMapper restoreMapper) {
         this.versionMapper = versionMapper;
@@ -360,6 +384,12 @@ public class WorkspaceVersionService {
         this.capacityWaitlistMapper = capacityWaitlistMapper;
         this.capacityWaitlistEventMapper = capacityWaitlistEventMapper;
         this.capacityNotificationMapper = capacityNotificationMapper;
+        this.disciplineCaseMapper = disciplineCaseMapper;
+        this.disciplineCaseVersionMapper = disciplineCaseVersionMapper;
+        this.disciplineEvidenceMapper = disciplineEvidenceMapper;
+        this.disciplineConsequenceMapper = disciplineConsequenceMapper;
+        this.disciplineUrgeMapper = disciplineUrgeMapper;
+        this.disciplineConfigMapper = disciplineConfigMapper;
         this.objectMapper = objectMapper;
         this.restoreMapper = restoreMapper;
     }
@@ -534,6 +564,12 @@ public class WorkspaceVersionService {
             data.put("capacityWaitlist", capacityWaitlistMapper.selectList(null));
             data.put("capacityWaitlistEvents", capacityWaitlistEventMapper.selectList(null));
             data.put("capacityNotifications", capacityNotificationMapper.selectList(null));
+            data.put("disciplineConfigs", disciplineConfigMapper.selectList(null));
+            data.put("disciplineCases", disciplineCaseMapper.selectList(null));
+            data.put("disciplineEvidences", disciplineEvidenceMapper.selectList(null));
+            data.put("disciplineCaseVersions", disciplineCaseVersionMapper.selectList(null));
+            data.put("disciplineConsequences", disciplineConsequenceMapper.selectList(null));
+            data.put("disciplineUrges", disciplineUrgeMapper.selectList(null));
             return objectMapper.writeValueAsString(data);
         } catch (Exception e) {
             throw new BusinessException("SNAPSHOT_FAILED", "生成工作区快照失败：" + e.getMessage());
@@ -569,6 +605,12 @@ public class WorkspaceVersionService {
         restoreMapper.clearCapacityStates();
         restoreMapper.clearCapacityVersions();
         restoreMapper.clearCapacityRules();
+        restoreMapper.clearDisciplineUrges();
+        restoreMapper.clearDisciplineConsequences();
+        restoreMapper.clearDisciplineCaseVersions();
+        restoreMapper.clearDisciplineEvidences();
+        restoreMapper.clearDisciplineCases();
+        restoreMapper.clearDisciplineConfigs();
         restoreMapper.clearPaperSelPapers();
         restoreMapper.clearPaperSelRuns();
         restoreMapper.clearPaperSelVersions();
@@ -748,6 +790,24 @@ public class WorkspaceVersionService {
         for (CapacityNotification n : nullSafe(data.capacityNotifications)) {
             restoreMapper.insertCapacityNotification(n);
         }
+        for (DisciplineConfig c : nullSafe(data.disciplineConfigs)) {
+            restoreMapper.insertDisciplineConfig(c);
+        }
+        for (DisciplineCase c : nullSafe(data.disciplineCases)) {
+            restoreMapper.insertDisciplineCase(c);
+        }
+        for (DisciplineEvidence e : nullSafe(data.disciplineEvidences)) {
+            restoreMapper.insertDisciplineEvidence(e);
+        }
+        for (DisciplineCaseVersion v : nullSafe(data.disciplineCaseVersions)) {
+            restoreMapper.insertDisciplineCaseVersion(v);
+        }
+        for (DisciplineConsequence c : nullSafe(data.disciplineConsequences)) {
+            restoreMapper.insertDisciplineConsequence(c);
+        }
+        for (DisciplineUrge u : nullSafe(data.disciplineUrges)) {
+            restoreMapper.insertDisciplineUrge(u);
+        }
         for (MixAlgorithm a : nullSafe(data.mixAlgorithms)) {
             restoreMapper.insertMixAlgorithm(a);
         }
@@ -854,6 +914,12 @@ public class WorkspaceVersionService {
         restoreMapper.restartCapacityWaitlist(restoreMapper.maxCapacityWaitlistId() + 1);
         restoreMapper.restartCapacityWaitlistEvent(restoreMapper.maxCapacityWaitlistEventId() + 1);
         restoreMapper.restartCapacityNotification(restoreMapper.maxCapacityNotificationId() + 1);
+        restoreMapper.restartDisciplineConfig(restoreMapper.maxDisciplineConfigId() + 1);
+        restoreMapper.restartDisciplineCase(restoreMapper.maxDisciplineCaseId() + 1);
+        restoreMapper.restartDisciplineEvidence(restoreMapper.maxDisciplineEvidenceId() + 1);
+        restoreMapper.restartDisciplineCaseVersion(restoreMapper.maxDisciplineCaseVersionId() + 1);
+        restoreMapper.restartDisciplineConsequence(restoreMapper.maxDisciplineConsequenceId() + 1);
+        restoreMapper.restartDisciplineUrge(restoreMapper.maxDisciplineUrgeId() + 1);
         restoreMapper.restartMixAlgorithm(restoreMapper.maxMixAlgorithmId() + 1);
         restoreMapper.restartMixVersion(restoreMapper.maxMixVersionId() + 1);
         restoreMapper.restartArrangementRun(restoreMapper.maxArrangementRunId() + 1);
@@ -1002,5 +1068,11 @@ public class WorkspaceVersionService {
         public List<CapacityWaitlist> capacityWaitlist;
         public List<CapacityWaitlistEvent> capacityWaitlistEvents;
         public List<CapacityNotification> capacityNotifications;
+        public List<DisciplineConfig> disciplineConfigs;
+        public List<DisciplineCase> disciplineCases;
+        public List<DisciplineEvidence> disciplineEvidences;
+        public List<DisciplineCaseVersion> disciplineCaseVersions;
+        public List<DisciplineConsequence> disciplineConsequences;
+        public List<DisciplineUrge> disciplineUrges;
     }
 }
